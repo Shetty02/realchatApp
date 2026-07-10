@@ -281,7 +281,7 @@ export default function ChatPage() {
       console.error(err);
     }
   };
-
+  console.log("test");
   const handleLeaveRoom = async () => {
     if (!activeRoom) return;
     try {
