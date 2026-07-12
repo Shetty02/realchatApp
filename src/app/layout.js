@@ -15,8 +15,8 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <body className="antialiased bg-slate-50 text-slate-900">
+    <html lang="en" suppressHydrationWarning>
+      <body className="antialiased bg-slate-50 text-slate-900" suppressHydrationWarning>
         <SocketProvider>
           <CallProvider>
             <Toaster

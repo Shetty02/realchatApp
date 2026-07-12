@@ -13,8 +13,10 @@ const SocketContext = createContext(null);
 
 export const useSocket = () => useContext(SocketContext);
 
-const BACKEND_URL = "http://localhost:4000";
-
+let BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000";
+if (BACKEND_URL.endsWith("/")) {
+  BACKEND_URL = BACKEND_URL.slice(0, -1);
+}
 export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
   const [user, setUser] = useState(null);

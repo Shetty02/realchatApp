@@ -350,15 +350,6 @@ export default function ChatPage() {
         fileUrl: uploadedFileUrl,
       });
 
-      const newMsgObj = {
-        id: Date.now().toString(),
-        from: user.username,
-        to: activeDmUser,
-        text: newMessage,
-        fileUrl: uploadedFileUrl,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, newMsgObj]);
       socket.emit("stop_private_typing", { to: activeDmUser });
     }
     setNewMessage("");
