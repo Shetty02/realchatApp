@@ -101,6 +101,10 @@ export const SocketProvider = ({ children }) => {
     });
 
     // Automatically register user presence on connect
+    if (newSocket.connected) {
+      newSocket.emit("register_user", user.username);
+    }
+
     newSocket.on("connect", () => {
       newSocket.emit("register_user", user.username);
     });

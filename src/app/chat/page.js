@@ -1396,8 +1396,8 @@ export default function ChatPage() {
                   className={`w-10 h-10 md:w-12 md:h-12 rounded-[12px] flex items-center justify-center bg-gradient-to-br ${getAvatarGradient(activeTitle)} text-base md:text-lg font-bold text-slate-900 relative`}
                 >
                   {activeTitle.charAt(0).toUpperCase()}
-                  {!activeRoom && (
-                    <span className="absolute bottom-0.5 right-0.5 w-3 h-3 bg-blue-600 border-2 border-slate-300 rounded-[12px]" />
+                  {!activeRoom && onlineUsers.map(u => u.toLowerCase()).includes(activeDmUser?.toLowerCase()) && (
+                    <span className="absolute bottom-0.5 right-0.5 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full" />
                   )}
                 </div>
                 <div>
@@ -1409,7 +1409,7 @@ export default function ChatPage() {
                       <span className="text-blue-600">{`${rooms.find((r) => r.id === activeRoom)?.members?.length || 0} Members`}</span>
                     ) : typingStatus === activeDmUser ? (
                       <span className="italic text-blue-600">typing...</span>
-                    ) : onlineUsers.includes(activeDmUser) ? (
+                    ) : onlineUsers.map(u => u.toLowerCase()).includes(activeDmUser?.toLowerCase()) ? (
                       <span className="text-blue-600 font-medium">Online</span>
                     ) : activeDmUserProfile?.lastSeen ? (
                       `Last seen ${formatLastSeen(activeDmUserProfile.lastSeen)}`
