@@ -27,6 +27,12 @@ export const CallProvider = ({ children }) => {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
 
+  const [isMicMuted, setIsMicMuted] = useState(false);
+  const [isVideoMuted, setIsVideoMuted] = useState(false);
+  const [isRemoteMicMuted, setIsRemoteMicMuted] = useState(false);
+  const [isRemoteVideoMuted, setIsRemoteVideoMuted] = useState(false);
+  const [facingMode, setFacingMode] = useState("user");
+
   const peerConnection = useRef(null);
   const localStreamRef = useRef(null);
 
@@ -83,11 +89,20 @@ export const CallProvider = ({ children }) => {
       cleanupCall();
     });
 
+    socket.on("call_state_change", (data) => {
+      if (data.type === "mic") {
+        setIsRemoteMicMuted(!data.enabled);
+      } else if (data.type === "video") {
+        setIsRemoteVideoMuted(!data.enabled);
+      }
+    });
+
     return () => {
       socket.off("incoming_call");
       socket.off("call_answered");
       socket.off("ice_candidate");
       socket.off("call_ended");
+      socket.off("call_state_change");
     };
   }, [socket, user, callStatus]);
 
@@ -267,13 +282,29 @@ export const CallProvider = ({ children }) => {
     setIncomingCall(null);
     setActiveCallUser(null);
     setCallType(null);
+    setIsMicMuted(false);
+    setIsVideoMuted(false);
+    setIsRemoteMicMuted(false);
+    setIsRemoteVideoMuted(false);
+    setFacingMode("user");
   };
 
   const toggleMic = () => {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
+        const newEnabled = !audioTrack.enabled;
+        audioTrack.enabled = newEnabled;
+        setIsMicMuted(!newEnabled);
+
+        if (activeCallUser) {
+          socket.emit("call_state_change", {
+            to: activeCallUser,
+            from: user.username,
+            type: "mic",
+            enabled: newEnabled,
+          });
+        }
       }
     }
   };
@@ -282,8 +313,75 @@ export const CallProvider = ({ children }) => {
     if (localStreamRef.current) {
       const videoTrack = localStreamRef.current.getVideoTracks()[0];
       if (videoTrack) {
-        videoTrack.enabled = !videoTrack.enabled;
+        const newEnabled = !videoTrack.enabled;
+        videoTrack.enabled = newEnabled;
+        setIsVideoMuted(!newEnabled);
+
+        if (activeCallUser) {
+          socket.emit("call_state_change", {
+            to: activeCallUser,
+            from: user.username,
+            type: "video",
+            enabled: newEnabled,
+          });
+        }
       }
+    }
+  };
+
+  const switchCamera = async () => {
+    if (callType !== "video" || !localStreamRef.current) return;
+    
+    try {
+      const newFacingMode = facingMode === "user" ? "environment" : "user";
+      setFacingMode(newFacingMode);
+      
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: newFacingMode },
+        audio: false,
+      });
+      
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (!newVideoTrack) return;
+      
+      // Replace video track in peer connection
+      if (peerConnection.current) {
+        const senders = peerConnection.current.getSenders();
+        const videoSender = senders.find(sender => sender.track && sender.track.kind === "video");
+        if (videoSender) {
+          await videoSender.replaceTrack(newVideoTrack);
+        }
+      }
+      
+      // Replace video track in local stream ref
+      const oldVideoTrack = localStreamRef.current.getVideoTracks()[0];
+      if (oldVideoTrack) {
+        oldVideoTrack.stop();
+        localStreamRef.current.removeTrack(oldVideoTrack);
+      }
+      localStreamRef.current.addTrack(newVideoTrack);
+      
+      // Recreate localStream object to trigger state update
+      setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+      
+      // Keep track of mute state
+      if (isVideoMuted) {
+        newVideoTrack.enabled = false;
+      } else {
+        if (activeCallUser) {
+          socket.emit("call_state_change", {
+            to: activeCallUser,
+            from: user.username,
+            type: "video",
+            enabled: true,
+          });
+        }
+      }
+      
+      toast.success(`Switched to ${newFacingMode === "user" ? "front" : "rear"} camera`);
+    } catch (err) {
+      console.error("Failed to switch camera", err);
+      toast.error("Could not switch camera. Device might not have multiple cameras.");
     }
   };
 
@@ -302,6 +400,12 @@ export const CallProvider = ({ children }) => {
         endCall,
         toggleMic,
         toggleVideo,
+        isMicMuted,
+        isVideoMuted,
+        isRemoteMicMuted,
+        isRemoteVideoMuted,
+        switchCamera,
+        facingMode,
       }}
     >
       {children}

@@ -32,7 +32,7 @@ export default function RootLayout({ children }) {
                 },
               }}
             />
-            <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-50 text-slate-900 relative selection:bg-blue-200 selection:text-blue-900">
+            <div className="flex flex-col h-[100dvh] w-screen overflow-hidden bg-slate-50 text-slate-900 relative selection:bg-blue-200 selection:text-blue-900">
               <main className="flex-1 w-full h-full relative z-10 overflow-hidden">
                 {children}
                 <CallModal />

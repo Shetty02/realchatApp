@@ -20,6 +20,7 @@ if (BACKEND_URL.endsWith("/")) {
 export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
   const [user, setUser] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [toast, setToast] = useState(null);
@@ -61,6 +62,7 @@ export const SocketProvider = ({ children }) => {
         console.error(e);
       }
     }
+    setIsLoading(false);
   }, []);
 
   // Initialize socket ONLY when user is authenticated with a token
@@ -160,7 +162,7 @@ export const SocketProvider = ({ children }) => {
   };
 
   // Helper for authenticated fetches
-  const authFetch = async (endpoint, options = {}) => {
+  const authFetch = useCallback(async (endpoint, options = {}) => {
     if (!user || !user.token) throw new Error("Not authenticated");
 
     const headers = {
@@ -187,13 +189,14 @@ export const SocketProvider = ({ children }) => {
       throw new Error(errorData.error || "Fetch failed");
     }
     return res.json();
-  };
+  }, [user]);
 
   return (
     <SocketContext.Provider
       value={{
         socket,
         user,
+        isLoading,
         onlineUsers,
         login,
         signup,

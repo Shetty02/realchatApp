@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from "react";
 import { useCall } from "@/context/CallContext";
-import { Phone, Video, Mic, MicOff, VideoOff, PhoneOff } from "lucide-react";
+import { Phone, Video, Mic, MicOff, VideoOff, PhoneOff, RefreshCw } from "lucide-react";
 
 export default function CallModal() {
   const {
@@ -17,6 +17,12 @@ export default function CallModal() {
     endCall,
     toggleMic,
     toggleVideo,
+    isMicMuted,
+    isVideoMuted,
+    isRemoteMicMuted,
+    isRemoteVideoMuted,
+    switchCamera,
+    facingMode,
   } = useCall();
 
   const localVideoRef = useRef(null);
@@ -127,32 +133,68 @@ export default function CallModal() {
             {callType === "video" ? (
               <>
                 {/* Remote Video */}
-                <video
-                  ref={remoteVideoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
-                
-                {/* Local Video (PiP) */}
-                <div className="absolute bottom-24 right-6 w-32 md:w-48 aspect-[3/4] bg-slate-900 rounded-[12px] overflow-hidden shadow-2xl border-2 border-white/20">
+                {isRemoteVideoMuted ? (
+                  <div className="flex flex-col items-center justify-center text-center text-white p-6 absolute inset-0 bg-slate-950 z-10">
+                    <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-slate-700 to-slate-800 flex items-center justify-center mb-4 border border-white/10 shadow-lg animate-in zoom-in-95 duration-200">
+                      <span className="text-3xl font-bold text-slate-300">
+                        {activeCallUser?.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="text-slate-400 text-sm font-medium tracking-wide">
+                      {activeCallUser} stopped video
+                    </p>
+                  </div>
+                ) : (
                   <video
-                    ref={localVideoRef}
+                    ref={remoteVideoRef}
                     autoPlay
                     playsInline
-                    muted
-                    className="w-full h-full object-cover transform scale-x-[-1]"
+                    className="w-full h-full object-cover animate-in fade-in duration-300"
                   />
+                )}
+                
+                {/* Remote Mic Muted Overlay Badge */}
+                {isRemoteMicMuted && (
+                  <div className="absolute top-20 left-6 px-3 py-1.5 rounded-[12px] bg-red-500/85 backdrop-blur text-white flex items-center gap-1.5 z-20 text-xs font-semibold border border-red-400/20 shadow-lg animate-in slide-in-from-left-5">
+                    <MicOff className="w-3.5 h-3.5" />
+                    <span>Muted</span>
+                  </div>
+                )}
+                
+                {/* Local Video (PiP) */}
+                <div className="absolute bottom-24 right-6 w-32 md:w-48 aspect-[3/4] bg-slate-900 rounded-[12px] overflow-hidden shadow-2xl border-2 border-white/20 z-20">
+                  {isVideoMuted ? (
+                    <div className="w-full h-full bg-slate-850 flex flex-col items-center justify-center text-center p-2 animate-in fade-in">
+                      <VideoOff className="w-6 h-6 text-slate-400 mb-1" />
+                      <span className="text-[10px] text-slate-400 font-medium">Video Off</span>
+                    </div>
+                  ) : (
+                    <video
+                      ref={localVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className={`w-full h-full object-cover animate-in fade-in ${facingMode === "user" ? "transform scale-x-[-1]" : ""}`}
+                    />
+                  )}
                 </div>
               </>
             ) : (
               /* Audio Only View */
               <div className="flex flex-col items-center justify-center">
-                <div className="w-32 h-32 rounded-[12px] bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-900/50 mb-6">
+                <div className="w-32 h-32 rounded-[12px] bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-900/50 mb-6 relative">
                   <span className="text-5xl font-bold text-white">
                     {activeCallUser?.charAt(0).toUpperCase()}
                   </span>
+                  {isRemoteMicMuted && (
+                    <div className="absolute -bottom-2 -right-2 w-10 h-10 rounded-full bg-red-500 flex items-center justify-center border-2 border-slate-900 shadow-md">
+                      <MicOff className="w-4 h-4 text-white" />
+                    </div>
+                  )}
                 </div>
+                {isRemoteMicMuted && (
+                  <p className="text-red-400 text-xs font-semibold mb-2 animate-pulse">Recipient is muted</p>
+                )}
                 {/* Hidden Audio Elements */}
                 <video ref={remoteVideoRef} autoPlay playsInline className="hidden" />
                 <video ref={localVideoRef} autoPlay playsInline muted className="hidden" />
@@ -164,23 +206,43 @@ export default function CallModal() {
           <div className="absolute bottom-6 inset-x-0 flex justify-center items-center gap-4 z-20">
             <button
               onClick={toggleMic}
-              className="w-12 h-12 rounded-[12px] bg-slate-800/80 backdrop-blur hover:bg-slate-700 text-white flex items-center justify-center transition-colors border border-white/10"
+              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border ${
+                isMicMuted
+                  ? "bg-red-500 hover:bg-red-600 text-white border-red-500 shadow-red-500/20"
+                  : "bg-slate-800/80 backdrop-blur hover:bg-slate-700 text-white border-white/10"
+              }`}
+              title={isMicMuted ? "Unmute Microphone" : "Mute Microphone"}
             >
-              <Mic className="w-5 h-5" />
+              {isMicMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
             </button>
             {callType === "video" && (
-              <button
-                onClick={toggleVideo}
-                className="w-12 h-12 rounded-[12px] bg-slate-800/80 backdrop-blur hover:bg-slate-700 text-white flex items-center justify-center transition-colors border border-white/10"
-              >
-                <Video className="w-5 h-5" />
-              </button>
+              <>
+                <button
+                  onClick={toggleVideo}
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all border ${
+                    isVideoMuted
+                      ? "bg-red-500 hover:bg-red-600 text-white border-red-500 shadow-red-500/20"
+                      : "bg-slate-800/80 backdrop-blur hover:bg-slate-700 text-white border-white/10"
+                  }`}
+                  title={isVideoMuted ? "Start Video" : "Stop Video"}
+                >
+                  {isVideoMuted ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
+                </button>
+                <button
+                  onClick={switchCamera}
+                  className="w-12 h-12 rounded-full bg-slate-800/80 backdrop-blur hover:bg-slate-700 text-white flex items-center justify-center transition-all border border-white/10"
+                  title="Switch Camera (Front/Rear)"
+                >
+                  <RefreshCw className="w-5 h-5" />
+                </button>
+              </>
             )}
             <button
               onClick={endCall}
-              className="w-14 h-14 rounded-[12px] bg-red-500 hover:bg-red-400 text-white flex items-center justify-center transition-all shadow-lg shadow-red-500/20 hover:scale-105 ml-2"
+              className="w-12 h-12 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center transition-all shadow-lg shadow-red-500/20 hover:scale-105"
+              title="Hang Up"
             >
-              <PhoneOff className="w-6 h-6" />
+              <PhoneOff className="w-5 h-5" />
             </button>
           </div>
         </div>

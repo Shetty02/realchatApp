@@ -40,6 +40,8 @@ import {
   Smile,
   ArrowLeft,
   Menu,
+  X,
+  Download,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import EmojiPicker from "emoji-picker-react";
@@ -55,6 +57,7 @@ export default function ChatPage() {
     guestLogin,
     authFetch,
     logout,
+    isLoading: isSessionLoading,
   } = useSocket();
   const { initiateCall } = useCall();
   const [rooms, setRooms] = useState([]);
@@ -80,6 +83,7 @@ export default function ChatPage() {
   const [newMessage, setNewMessage] = useState("");
   const [typingStatus, setTypingStatus] = useState("");
   const messagesEndRef = useRef(null);
+  const lastScrolledChatRef = useRef(null);
 
   // New Features State
   const [friendsList, setFriendsList] = useState([]);
@@ -96,10 +100,38 @@ export default function ChatPage() {
   const avatarInputRef = useRef(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [activeLightboxMsg, setActiveLightboxMsg] = useState(null);
+  const [activeDmUserProfile, setActiveDmUserProfile] = useState(null);
+  const [editingMessage, setEditingMessage] = useState(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, typingStatus]);
+    if (messages.length === 0) return;
+
+    const currentChatId = activeRoom ? `room:${activeRoom}` : `dm:${activeDmUser}`;
+
+    if (lastScrolledChatRef.current !== currentChatId) {
+      // First time loading this chat - scroll instantly to bottom
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      lastScrolledChatRef.current = currentChatId;
+    } else {
+      // New messages arriving in the current active chat - scroll smoothly
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, activeRoom, activeDmUser]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setActiveLightboxMsg(null);
+      }
+    };
+    if (activeLightboxMsg) {
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeLightboxMsg]);
 
   useEffect(() => {
     if (!user) return;
@@ -128,11 +160,17 @@ export default function ChatPage() {
     }
   }, [user, authFetch]);
 
+  // Clear messages immediately when switching rooms or DM users
   useEffect(() => {
-    if (!socket || !user) return;
-
     setMessages([]);
     setTypingStatus("");
+    setActiveDmUserProfile(null);
+    setEditingMessage(null);
+  }, [activeRoom, activeDmUser]);
+
+  // Fetch messages and handle socket joins in the background
+  useEffect(() => {
+    if (!socket || !user) return;
 
     if (activeRoom) {
       socket.emit("join_room", activeRoom);
@@ -143,6 +181,15 @@ export default function ChatPage() {
       authFetch(`/api/private-messages/${user.username}/${activeDmUser}`)
         .then((data) => setMessages(data))
         .catch((err) => console.error("Error fetching DM messages:", err));
+
+      authFetch(`/api/users/profile/${activeDmUser}`)
+        .then((data) => setActiveDmUserProfile(data))
+        .catch((err) => console.error("Error fetching profile details:", err));
+
+      socket.emit("mark_messages_read", {
+        from: activeDmUser,
+        to: user.username
+      });
     }
   }, [socket, user, activeRoom, activeDmUser, authFetch]);
 
@@ -165,6 +212,12 @@ export default function ChatPage() {
 
         if (matchesCurrentDm) {
           setMessages((prev) => [...prev, msg]);
+          if (msg.from.toLowerCase() === activeDmUser.toLowerCase()) {
+            socket.emit("mark_messages_read", {
+              from: activeDmUser,
+              to: user.username
+            });
+          }
         }
       }
     };
@@ -204,12 +257,44 @@ export default function ChatPage() {
       }
     };
 
+    const handleUserLastSeenUpdate = (data) => {
+      if (activeDmUser && data.username.toLowerCase() === activeDmUser.toLowerCase()) {
+        setActiveDmUserProfile(prev => prev ? { ...prev, lastSeen: data.lastSeen } : { username: activeDmUser, lastSeen: data.lastSeen });
+      }
+    };
+
+    const handleMessageStatusUpdate = (data) => {
+      if (data.from.toLowerCase() === user.username.toLowerCase() &&
+        activeDmUser && data.to.toLowerCase() === activeDmUser.toLowerCase()) {
+        setMessages(prev => prev.map(msg => {
+          if (msg.from === user.username || msg.user === user.username) {
+            if (data.status === 'read' || (data.status === 'delivered' && msg.status !== 'read')) {
+              return { ...msg, status: data.status };
+            }
+          }
+          return msg;
+        }));
+      }
+    };
+
+    const handleMessageEdited = (editedMsg) => {
+      setMessages(prev => prev.map(m => (m.id === editedMsg.id || m._id === editedMsg.id || m._id === editedMsg._id) ? editedMsg : m));
+    };
+
+    const handleMessageDeleted = (deletedMsg) => {
+      setMessages(prev => prev.map(m => (m.id === deletedMsg.id || m._id === deletedMsg.id || m._id === deletedMsg._id) ? deletedMsg : m));
+    };
+
     socket.on("receive_message", handleReceiveMessage);
     socket.on("receive_private_message", handleReceivePrivateMessage);
     socket.on("user_typing", handleUserTyping);
     socket.on("user_stop_typing", handleUserStopTyping);
     socket.on("room_created", handleRoomCreated);
     socket.on("new_friend_request", handleNewFriendRequest);
+    socket.on("user_last_seen_update", handleUserLastSeenUpdate);
+    socket.on("message_status_update", handleMessageStatusUpdate);
+    socket.on("message_edited", handleMessageEdited);
+    socket.on("message_deleted", handleMessageDeleted);
     return () => {
       socket.off("receive_message", handleReceiveMessage);
       socket.off("receive_private_message", handleReceivePrivateMessage);
@@ -217,6 +302,10 @@ export default function ChatPage() {
       socket.off("user_stop_typing", handleUserStopTyping);
       socket.off("room_created", handleRoomCreated);
       socket.off("new_friend_request", handleNewFriendRequest);
+      socket.off("user_last_seen_update", handleUserLastSeenUpdate);
+      socket.off("message_status_update", handleMessageStatusUpdate);
+      socket.off("message_edited", handleMessageEdited);
+      socket.off("message_deleted", handleMessageDeleted);
     };
   }, [socket, user, activeRoom, activeDmUser]);
 
@@ -301,12 +390,37 @@ export default function ChatPage() {
     }
   };
 
+  const handleStartEdit = (msg) => {
+    setEditingMessage(msg);
+    setNewMessage(msg.text || "");
+  };
+
+  const handleDeleteMessage = (messageId) => {
+    if (confirm("Are you sure you want to delete this message?")) {
+      socket.emit("delete_message", {
+        messageId,
+        isPrivate: !!activeDmUser
+      });
+    }
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if ((!newMessage.trim() && !selectedFile) || !socket || !user) return;
 
     if (user.isGuest) {
       logout();
+      return;
+    }
+
+    if (editingMessage) {
+      socket.emit("edit_message", {
+        messageId: editingMessage.id || editingMessage._id,
+        text: newMessage,
+        isPrivate: !!activeDmUser
+      });
+      setEditingMessage(null);
+      setNewMessage("");
       return;
     }
 
@@ -340,6 +454,7 @@ export default function ChatPage() {
         user: user.username,
         text: newMessage,
         fileUrl: uploadedFileUrl,
+        replyTo: replyToMessage,
       });
       socket.emit("stop_typing", { roomId: activeRoom });
     } else if (activeDmUser) {
@@ -348,11 +463,13 @@ export default function ChatPage() {
         from: user.username,
         text: newMessage,
         fileUrl: uploadedFileUrl,
+        replyTo: replyToMessage,
       });
 
       socket.emit("stop_private_typing", { to: activeDmUser });
     }
     setNewMessage("");
+    setReplyToMessage(null);
   };
 
   const handleAvatarUpload = async (e) => {
@@ -479,9 +596,41 @@ export default function ChatPage() {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
+  const formatLastSeen = (dateString) => {
+    if (!dateString) return "";
+    const date = new Date(dateString);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+
+    const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (isToday) {
+      return `today at ${timeStr}`;
+    }
+
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = date.toDateString() === yesterday.toDateString();
+    if (isYesterday) {
+      return `yesterday at ${timeStr}`;
+    }
+
+    return `${date.toLocaleDateString()} at ${timeStr}`;
+  };
+
   const activeTitle = activeRoom
     ? rooms.find((r) => r.id === activeRoom)?.name || "Channel"
     : activeDmUser || "Chat";
+
+  if (isSessionLoading) {
+    return (
+      <div className="h-screen bg-white flex flex-col items-center justify-center relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-purple-600/10 blur-[120px] rounded-[12px] pointer-events-none" />
+        <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-indigo-600/10 blur-[120px] rounded-[12px] pointer-events-none" />
+        <div className="w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin relative z-10" />
+        <p className="mt-4 text-slate-500 font-semibold text-sm animate-pulse relative z-10">Connecting to portal...</p>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -1232,10 +1381,10 @@ export default function ChatPage() {
         ) : (
           <>
             {/* Chat Header */}
-            <div className="h-[88px] px-4 md:px-8 border-b border-slate-200 flex items-center justify-between shrink-0 bg-white z-10">
-              <div className="flex items-center gap-4">
+            <div className="h-[72px] md:h-[88px] px-3 md:px-8 border-b border-slate-200 flex items-center justify-between shrink-0 bg-white z-10">
+              <div className="flex items-center gap-2 md:gap-4">
                 <button
-                  className="lg:hidden w-10 h-10 flex items-center justify-center rounded-[12px] hover:bg-slate-100 transition-colors"
+                  className="lg:hidden w-8 h-8 md:w-10 md:h-10 flex items-center justify-center rounded-[12px] hover:bg-slate-100 transition-colors"
                   onClick={() => {
                     setActiveRoom(null);
                     setActiveDmUser(null);
@@ -1244,7 +1393,7 @@ export default function ChatPage() {
                   <ArrowLeft className="w-5 h-5 text-slate-600" />
                 </button>
                 <div
-                  className={`w-12 h-12 rounded-[12px] flex items-center justify-center bg-gradient-to-br ${getAvatarGradient(activeTitle)} text-lg font-bold text-slate-900 relative`}
+                  className={`w-10 h-10 md:w-12 md:h-12 rounded-[12px] flex items-center justify-center bg-gradient-to-br ${getAvatarGradient(activeTitle)} text-base md:text-lg font-bold text-slate-900 relative`}
                 >
                   {activeTitle.charAt(0).toUpperCase()}
                   {!activeRoom && (
@@ -1255,13 +1404,17 @@ export default function ChatPage() {
                   <h2 className="font-bold text-lg text-slate-900">
                     {activeTitle}
                   </h2>
-                  <p className="text-sm text-blue-600">
+                  <p className="text-sm text-slate-500">
                     {activeRoom ? (
-                      `${rooms.find((r) => r.id === activeRoom)?.members?.length || 0} Members`
+                      <span className="text-blue-600">{`${rooms.find((r) => r.id === activeRoom)?.members?.length || 0} Members`}</span>
                     ) : typingStatus === activeDmUser ? (
-                      <span className="italic">typing...</span>
+                      <span className="italic text-blue-600">typing...</span>
+                    ) : onlineUsers.includes(activeDmUser) ? (
+                      <span className="text-blue-600 font-medium">Online</span>
+                    ) : activeDmUserProfile?.lastSeen ? (
+                      `Last seen ${formatLastSeen(activeDmUserProfile.lastSeen)}`
                     ) : (
-                      "Online"
+                      "Offline"
                     )}
                   </p>
                 </div>
@@ -1274,9 +1427,11 @@ export default function ChatPage() {
                   activeRoom !== "general" && (
                     <button
                       onClick={handleLeaveRoom}
-                      className="text-xs font-semibold px-4 py-2 bg-white/5 hover:bg-slate-200 rounded-[12px] transition-colors text-slate-900"
+                      className="text-xs font-semibold px-2 py-2 md:px-4 bg-slate-100 hover:bg-slate-200 rounded-[12px] transition-colors text-slate-900 flex items-center gap-1.5"
+                      title="Leave Channel"
                     >
-                      Leave Channel
+                      <LogOut className="w-4 h-4" />
+                      <span className="hidden md:inline">Leave Channel</span>
                     </button>
                   )}
 
@@ -1285,34 +1440,34 @@ export default function ChatPage() {
                   <>
                     <button
                       onClick={() => initiateCall(activeDmUser, "audio")}
-                      className="w-10 h-10 rounded-[12px] bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors"
+                      className="w-8 h-8 md:w-10 md:h-10 rounded-[12px] bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors"
                     >
-                      <Phone className="w-5 h-5 text-slate-500" />
+                      <Phone className="w-4 h-4 md:w-5 md:h-5 text-slate-500" />
                     </button>
                     <button
                       onClick={() => initiateCall(activeDmUser, "video")}
-                      className="w-10 h-10 rounded-[12px] bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors"
+                      className="w-8 h-8 md:w-10 md:h-10 rounded-[12px] bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors"
                     >
-                      <Video className="w-5 h-5 text-slate-500" />
+                      <Video className="w-4 h-4 md:w-5 md:h-5 text-slate-500" />
                     </button>
                   </>
                 )}
 
                 <button
                   onClick={() => toast("More options opened")}
-                  className="w-10 h-10 rounded-[12px] bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors"
+                  className="w-8 h-8 md:w-10 md:h-10 rounded-[12px] bg-slate-100 flex items-center justify-center hover:bg-slate-200 transition-colors"
                 >
-                  <MoreVertical className="w-5 h-5 text-slate-500" />
+                  <MoreVertical className="w-4 h-4 md:w-5 md:h-5 text-slate-500" />
                 </button>
               </div>
             </div>
 
             {/* Lock Screen for unjoined channels */}
             {activeRoom &&
-            !rooms
-              .find((r) => r.id === activeRoom)
-              ?.members?.includes(user?.username) &&
-            activeRoom !== "general" ? (
+              !rooms
+                .find((r) => r.id === activeRoom)
+                ?.members?.includes(user?.username) &&
+              activeRoom !== "general" ? (
               <div className="flex-1 p-6 flex flex-col items-center justify-center text-center">
                 <div className="w-20 h-20 rounded-[12px] bg-slate-100 flex items-center justify-center mb-6">
                   <Lock className="w-8 h-8 text-slate-500" />
@@ -1345,7 +1500,7 @@ export default function ChatPage() {
             ) : (
               <>
                 {/* Messages Area */}
-                <div className="flex-1 p-8 overflow-y-auto no-scrollbar space-y-6 flex flex-col bg-white">
+                <div className="flex-1 p-4 md:p-8 overflow-y-auto no-scrollbar space-y-6 flex flex-col bg-white">
                   <div className="text-center my-4 flex items-center justify-center gap-4">
                     <div className="h-px bg-slate-200 flex-1 max-w-[100px]"></div>
                     <span className="text-xs font-medium text-slate-400">
@@ -1370,7 +1525,7 @@ export default function ChatPage() {
                     return (
                       <div
                         key={msg.id}
-                        className={`flex max-w-[70%] gap-3 ${isMe ? "ml-auto flex-row-reverse" : "mr-auto flex-row"}`}
+                        className={`flex max-w-[85%] md:max-w-[70%] gap-2 md:gap-3 group relative ${isMe ? "ml-auto flex-row-reverse" : "mr-auto flex-row"}`}
                       >
                         {!isMe && (
                           <div
@@ -1390,6 +1545,12 @@ export default function ChatPage() {
                                 {sender}
                               </p>
                             )}
+                            {msg.replyTo && (
+                              <div className={`p-2 mb-2 rounded-[8px] text-xs border-l-4 ${isMe ? "bg-blue-700/50 border-white/60 text-white/90" : "bg-slate-200/60 border-blue-500 text-slate-600"} line-clamp-2`}>
+                                <span className="font-bold block text-[11px] mb-0.5">{msg.replyTo.user}</span>
+                                {msg.replyTo.text}
+                              </div>
+                            )}
                             {msg.fileUrl &&
                               (msg.fileUrl.match(/\.(mp4|webm|ogg|mov)$/i) ? (
                                 <video
@@ -1398,12 +1559,13 @@ export default function ChatPage() {
                                   className="max-w-[200px] rounded-[12px] mb-2"
                                 />
                               ) : msg.fileUrl.match(
-                                  /\.(jpg|jpeg|png|gif|webp|svg)$/i,
-                                ) ? (
+                                /\.(jpg|jpeg|png|gif|webp|svg)$/i,
+                              ) ? (
                                 <img
                                   src={msg.fileUrl}
                                   alt="Uploaded content"
-                                  className="max-w-[200px] rounded-[12px] mb-2"
+                                  className="max-w-[200px] rounded-[12px] mb-2 cursor-pointer hover:scale-[1.02] active:scale-95 transition-all duration-200 shadow-sm hover:shadow-md"
+                                  onClick={() => setActiveLightboxMsg(msg)}
                                 />
                               ) : (
                                 <a
@@ -1418,13 +1580,70 @@ export default function ChatPage() {
                                 </a>
                               ))}
                             {msg.text && (
-                              <p className="leading-relaxed">{msg.text}</p>
+                              <p className="leading-relaxed break-words">{msg.text}</p>
                             )}
                           </div>
-                          <span className="text-[11px] text-slate-400 mt-1.5 px-1">
-                            {formatTime(msg.timestamp)}
-                          </span>
+
+                          <div className="flex items-center gap-1 mt-1.5 px-1">
+                            <span className="text-[11px] text-slate-400">
+                              {formatTime(msg.timestamp)}
+                            </span>
+                            {isMe && !activeRoom && !msg.isDeleted && (
+                              <span className="ml-1 shrink-0">
+                                {msg.status === "read" ? (
+                                  <div className="flex -space-x-1">
+                                    <span className="text-blue-500 text-xs font-bold">✓</span>
+                                    <span className="text-blue-500 text-xs font-bold">✓</span>
+                                  </div>
+                                ) : msg.status === "delivered" ? (
+                                  <div className="flex -space-x-1">
+                                    <span className="text-slate-400 text-xs">✓</span>
+                                    <span className="text-slate-400 text-xs">✓</span>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400 text-xs">✓</span>
+                                )}
+                              </span>
+                            )}
+                            {isMe && activeRoom && !msg.isDeleted && (
+                              <span className="ml-1 text-slate-400 text-xs shrink-0">✓</span>
+                            )}
+                            {msg.isEdited && !msg.isDeleted && (
+                              <span className="text-[10px] text-slate-400 italic ml-1.5">(edited)</span>
+                            )}
+                          </div>
                         </div>
+
+                        {/* Hover Actions Menu */}
+                        {!msg.isDeleted && (
+                          <div className={`hidden group-hover:flex items-center gap-1.5 absolute top-1/2 -translate-y-1/2 ${isMe ? "right-full mr-2" : "left-full ml-2"} bg-white border border-slate-200 shadow-md rounded-[12px] p-1.5 z-10`}>
+                            <button
+                              onClick={() => setReplyToMessage({ id: msg.id || msg._id, text: msg.text, user: sender })}
+                              className="text-xs hover:bg-slate-100 p-1 rounded-[8px] text-slate-500 font-semibold transition-colors"
+                              title="Reply"
+                            >
+                              ↩
+                            </button>
+                            {isMe && (
+                              <>
+                                <button
+                                  onClick={() => handleStartEdit(msg)}
+                                  className="text-xs hover:bg-slate-100 p-1 rounded-[8px] text-slate-500 font-semibold transition-colors"
+                                  title="Edit"
+                                >
+                                  ✎
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteMessage(msg.id || msg._id)}
+                                  className="text-xs hover:bg-red-50 hover:text-red-500 p-1 rounded-[8px] text-slate-500 font-semibold transition-colors"
+                                  title="Delete"
+                                >
+                                  🗑
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1452,7 +1671,7 @@ export default function ChatPage() {
                 </div>
 
                 {/* Input Area */}
-                <div className="p-6 bg-white shrink-0 border-t border-slate-100 relative">
+                <div className="p-3 md:p-6 bg-white shrink-0 border-t border-slate-100 relative">
                   {showEmojiPicker && (
                     <div className="absolute bottom-[100px] left-6 z-50 shadow-2xl rounded-[12px]">
                       <EmojiPicker
@@ -1478,18 +1697,53 @@ export default function ChatPage() {
                       </button>
                     </div>
                   )}
+
+                  {/* Reply Preview Bar */}
+                  {replyToMessage && (
+                    <div className="mb-2 p-2.5 bg-slate-50 border-l-4 border-blue-500 rounded-[12px] flex items-center justify-between">
+                      <div className="text-xs text-left">
+                        <span className="font-bold text-blue-600 block">Reply to {replyToMessage.user}</span>
+                        <span className="text-slate-500 line-clamp-1">{replyToMessage.text}</span>
+                      </div>
+                      <button
+                        onClick={() => setReplyToMessage(null)}
+                        className="text-slate-400 hover:text-slate-900 ml-4 shrink-0 text-sm"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Edit Preview Bar */}
+                  {editingMessage && (
+                    <div className="mb-2 p-2.5 bg-slate-50 border-l-4 border-amber-500 rounded-[12px] flex items-center justify-between">
+                      <div className="text-xs text-left">
+                        <span className="font-bold text-amber-600 block">Editing Message</span>
+                        <span className="text-slate-500 line-clamp-1">{editingMessage.text}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setEditingMessage(null);
+                          setNewMessage("");
+                        }}
+                        className="text-slate-400 hover:text-slate-900 ml-4 shrink-0 text-sm"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
                       setShowEmojiPicker(false);
                       handleSendMessage(e);
                     }}
-                    className="flex gap-2 items-center border border-slate-200 rounded-[12px] p-2 pr-2 transition-colors focus-within:border-blue-600"
+                    className="flex gap-1 md:gap-2 items-center border border-slate-200 rounded-[12px] p-1.5 md:p-2 pr-1.5 md:pr-2 transition-colors focus-within:border-blue-600"
                   >
                     <button
                       type="button"
                       onClick={() => setShowEmojiPicker((prev) => !prev)}
-                      className={`w-10 h-10 flex items-center justify-center rounded-[12px] hover:bg-slate-100 transition-colors ${showEmojiPicker ? "bg-slate-100" : ""}`}
+                      className={`w-8 h-8 md:w-10 md:h-10 flex items-center justify-center rounded-[12px] hover:bg-slate-100 transition-colors ${showEmojiPicker ? "bg-slate-100" : ""}`}
                       title="Emojis"
                     >
                       <Smile className="w-5 h-5 text-slate-500" />
@@ -1508,7 +1762,7 @@ export default function ChatPage() {
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="w-10 h-10 flex items-center justify-center rounded-[12px] hover:bg-slate-100 transition-colors"
+                      className="w-8 h-8 md:w-10 md:h-10 flex items-center justify-center rounded-[12px] hover:bg-slate-100 transition-colors"
                       title="Attach File"
                     >
                       <Plus className="w-5 h-5 text-slate-500" />
@@ -1523,15 +1777,19 @@ export default function ChatPage() {
                       value={newMessage}
                       onChange={handleInputChange}
                       disabled={user?.isGuest || isUploading}
-                      className="flex-1 bg-transparent text-slate-900 placeholder:text-slate-400 focus:outline-none text-[15px] px-4"
+                      className="flex-1 min-w-0 bg-transparent text-slate-900 placeholder:text-slate-400 focus:outline-none text-[15px] px-2 md:px-4"
                     />
                     <button
                       type="submit"
                       disabled={user?.isGuest || isUploading}
-                      className="w-24 h-10 rounded-[12px] bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center justify-center gap-2 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center shrink-0 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Send Message"
                     >
-                      {isUploading ? "..." : "Send"}{" "}
-                      {!isUploading && <Send className="w-4 h-4 fill-white" />}
+                      {isUploading ? (
+                        <span className="text-[10px]">...</span>
+                      ) : (
+                        <Send className="w-4 h-4 fill-white -translate-x-[1px] translate-y-[1px]" />
+                      )}
                     </button>
                   </form>
                 </div>
@@ -1675,6 +1933,69 @@ export default function ChatPage() {
                 <span className="text-[10px] text-slate-400">12 Nov</span>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp-like Lightbox Modal for Images */}
+      {activeLightboxMsg && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-slate-950/95 backdrop-blur-md transition-opacity duration-300 animate-in fade-in"
+          onClick={() => setActiveLightboxMsg(null)}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 bg-slate-900/50 border-b border-slate-800/50 backdrop-blur-sm z-10">
+            <div className="flex items-center gap-3 text-white">
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center bg-gradient-to-br ${getAvatarGradient(
+                  activeLightboxMsg.user || activeLightboxMsg.from
+                )} text-white font-bold`}
+              >
+                {(activeLightboxMsg.user || activeLightboxMsg.from).charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <p className="font-semibold text-sm">
+                  {activeLightboxMsg.user || activeLightboxMsg.from}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  {formatTime(activeLightboxMsg.timestamp)}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <a
+                href={activeLightboxMsg.fileUrl}
+                download
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="w-10 h-10 rounded-full flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-white transition-colors"
+                title="Download Image"
+              >
+                <Download className="w-5 h-5" />
+              </a>
+              <button
+                onClick={() => setActiveLightboxMsg(null)}
+                className="w-10 h-10 rounded-full flex items-center justify-center bg-slate-800 hover:bg-slate-700 text-white transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Image Container */}
+          <div
+            className="flex-1 flex items-center justify-center p-4 relative"
+            onClick={() => setActiveLightboxMsg(null)}
+          >
+            <img
+              src={activeLightboxMsg.fileUrl}
+              alt="Preview"
+              className="max-h-[80vh] max-w-[90vw] object-contain rounded-lg shadow-2xl transition-transform duration-300 animate-in zoom-in-95"
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}
